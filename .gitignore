@@ -1,0 +1,22 @@
+# IDEs and editors
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+Thumbs.db
+
+# Backend (Maven) Build artifacts
+backend/target/
+backend/*.log
+
+# Frontend (Node/Vite) Build artifacts & dependencies
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.env*.local
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/pnpm-debug.log*
