@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { CheckCircle2, XCircle, Users, Loader2, RefreshCw } from 'lucide-react';
+import { CheckCircle2, XCircle, Users, Loader2, RefreshCw, Camera, CameraOff } from 'lucide-react';
+import { Html5QrcodePlugin } from './Html5QrcodePlugin';
 
 export const StaffValidator = () => {
   const [events, setEvents] = useState([]);
@@ -11,6 +12,7 @@ export const StaffValidator = () => {
   const [validating, setValidating] = useState(false);
   const [purchasedTickets, setPurchasedTickets] = useState([]);
   const [ticketsLoading, setTicketsLoading] = useState(false);
+  const [showCameraScanner, setShowCameraScanner] = useState(false);
 
   useEffect(() => {
     fetchEvents();
@@ -130,6 +132,38 @@ export const StaffValidator = () => {
                 Validate
               </button>
             </div>
+
+            <div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+              {showCameraScanner ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                  <Html5QrcodePlugin 
+                    onScanSuccess={(decodedText) => {
+                      setQrCodeInput(decodedText);
+                      setShowCameraScanner(false);
+                      handleValidate(decodedText);
+                    }}
+                  />
+                  <button 
+                    className="btn btn-secondary" 
+                    style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                    onClick={() => setShowCameraScanner(false)}
+                  >
+                    <CameraOff size={16} />
+                    Close Camera Scanner
+                  </button>
+                </div>
+              ) : (
+                <button 
+                  className="btn btn-secondary" 
+                  style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+                  onClick={() => setShowCameraScanner(true)}
+                >
+                  <Camera size={16} />
+                  Scan with Web Camera
+                </button>
+              )}
+            </div>
+
             <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
               Tip: Copy a QR ID from the simulator helper on the right and paste it here, or click it in the list to scan automatically.
             </p>

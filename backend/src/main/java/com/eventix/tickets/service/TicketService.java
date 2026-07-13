@@ -104,7 +104,7 @@ public class TicketService {
                 String receipt = "txn_" + UUID.randomUUID().toString().substring(0, 8);
                 com.razorpay.Order order = razorpayService.createOrder(totalPrice, "INR", receipt);
                 String orderId = order.get("id");
-                long amountInPaise = order.get("amount");
+                long amountInPaise = ((Number) order.get("amount")).longValue();
 
                 List<Ticket> savedTickets = new ArrayList<>();
                 for (int i = 0; i < quantity; i++) {
