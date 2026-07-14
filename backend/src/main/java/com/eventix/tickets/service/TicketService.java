@@ -27,7 +27,6 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
-@Transactional
 public class TicketService {
 
     private final TicketRepository ticketRepository;
@@ -35,88 +34,40 @@ public class TicketService {
     private final EventRepository eventRepository;
     private final TicketMapper ticketMapper;
     private final RazorpayService razorpayService;
+    private final TicketReservationHelper ticketReservationHelper;
 
     public PurchaseResponseDTO initiateTicketPurchase(PurchaseRequestDTO purchaseRequest, String purchaserId) {
-        UUID ticketTypeId = purchaseRequest.getTicketTypeId();
-        int quantity = purchaseRequest.getQuantity() != null ? purchaseRequest.getQuantity() : 1;
-
-        if (quantity <= 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Quantity must be greater than 0");
-        }
-
-        TicketType ticketType = ticketTypeRepository.findByIdForUpdate(ticketTypeId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Ticket type not found"));
-
-        Event event = ticketType.getEvent();
-
-        if (event.getStatus() != EventStatusEnum.PUBLISHED) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Event is not published");
-        }
-
         LocalDateTime now = LocalDateTime.now();
-        if (event.getSalesStartDate() != null && now.isBefore(event.getSalesStartDate())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ticket sales have not started yet");
-        }
-        if (event.getSalesEndDate() != null && now.isAfter(event.getSalesEndDate())) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ticket sales have ended");
+
+        // 1. Reserve tickets inside a short database transaction
+        List<Ticket> savedTickets = ticketReservationHelper.reserveTickets(purchaseRequest, purchaserId, now);
+
+        if (savedTickets.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "No tickets were created");
         }
 
-        if (ticketType.getTotalAvailable() != null) {
-            long sold = ticketRepository.countByTicketTypeIdAndStatus(ticketTypeId, TicketStatusEnum.PURCHASED);
-            long pending = ticketRepository.countByTicketTypeIdAndStatusAndCreatedDateTimeAfter(
-                    ticketTypeId,
-                    TicketStatusEnum.PENDING_PAYMENT,
-                    now.minusMinutes(10)
-            );
-            if (sold + pending + quantity > ticketType.getTotalAvailable()) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Not enough tickets available");
-            }
-        }
-
-        double totalPrice = ticketType.getPrice() * quantity;
-        boolean isFree = totalPrice <= 0;
+        // Check if the tickets are free (determined by status being PURCHASED directly from reserveTickets)
+        boolean isFree = savedTickets.get(0).getStatus() == TicketStatusEnum.PURCHASED;
 
         if (isFree) {
-            List<Ticket> savedTickets = new ArrayList<>();
-            for (int i = 0; i < quantity; i++) {
-                Ticket ticket = Ticket.builder()
-                        .purchaserId(purchaserId)
-                        .status(TicketStatusEnum.PURCHASED)
-                        .createdDateTime(now)
-                        .ticketType(ticketType)
-                        .build();
-
-                QrCode qrCode = QrCode.builder()
-                        .generatedTime(now)
-                        .status(QrCodeStatusEnum.ACTIVE)
-                        .build();
-
-                ticket.setQrCode(qrCode);
-                savedTickets.add(ticketRepository.save(ticket));
-            }
-
             return PurchaseResponseDTO.builder()
                     .isFree(true)
                     .tickets(ticketMapper.toDtoList(savedTickets))
                     .build();
         } else {
+            // 2. Non-free ticket: Initiate Razorpay order creation (OUTSIDE database transaction)
+            Ticket firstTicket = savedTickets.get(0);
+            TicketType ticketType = firstTicket.getTicketType();
+            double totalPrice = ticketType.getPrice() * savedTickets.size();
+
             try {
                 String receipt = "txn_" + UUID.randomUUID().toString().substring(0, 8);
                 com.razorpay.Order order = razorpayService.createOrder(totalPrice, "INR", receipt);
                 String orderId = order.get("id");
                 long amountInPaise = ((Number) order.get("amount")).longValue();
 
-                List<Ticket> savedTickets = new ArrayList<>();
-                for (int i = 0; i < quantity; i++) {
-                    Ticket ticket = Ticket.builder()
-                            .purchaserId(purchaserId)
-                            .status(TicketStatusEnum.PENDING_PAYMENT)
-                            .paymentOrderId(orderId)
-                            .createdDateTime(now)
-                            .ticketType(ticketType)
-                            .build();
-                    savedTickets.add(ticketRepository.save(ticket));
-                }
+                // 3. Update tickets with paymentOrderId inside a short transaction
+                ticketReservationHelper.updatePaymentOrderId(savedTickets, orderId);
 
                 return PurchaseResponseDTO.builder()
                         .paymentOrderId(orderId)
@@ -127,11 +78,18 @@ public class TicketService {
                         .tickets(ticketMapper.toDtoList(savedTickets))
                         .build();
             } catch (Exception e) {
+                // Compensating action: Release/delete the reserved tickets immediately in a short transaction
+                try {
+                    ticketReservationHelper.cancelReservation(savedTickets);
+                } catch (Exception ex) {
+                    // Log the failure to release, but propagate the original payment exception
+                }
                 throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to initiate payment: " + e.getMessage(), e);
             }
         }
     }
 
+    @Transactional
     public List<TicketDTO> verifyPayment(PaymentVerificationRequestDTO verificationRequest, String purchaserId) {
         String orderId = verificationRequest.getRazorpayOrderId();
         String paymentId = verificationRequest.getRazorpayPaymentId();

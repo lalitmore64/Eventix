@@ -9,7 +9,10 @@ import java.util.List;
 import java.util.UUID;
 
 @Entity
-@Table(name = "events")
+@Table(name = "events", indexes = {
+        @Index(name = "idx_events_organizer_id", columnList = "organizerId"),
+        @Index(name = "idx_events_status", columnList = "status")
+})
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
